@@ -1,15 +1,21 @@
 #define NOMINMAX
+#define INITGUID
+
 #include <Windows.h>
 #include <Textstor.h>
 #include <msctf.h>
 #include <olectl.h>
+#include <Richedit.h>
+#include <InputScope.h>
 
 #include <iostream>
 #include <string>
 #include <cmath>
 #include <concepts>
+#include <vector>
 
 int viewId = 1;
+auto englishLangId = 0x0409;
 
 template<class Runnable>
 class Defer
@@ -23,10 +29,8 @@ public:
     Defer& operator=(Defer const&) = delete;
     Defer& operator=(Defer&&) = delete;
 
-    ~Defer()
-    {
-        if (!done)
-        {
+    ~Defer() {
+        if (!done) {
             (*runnable)();
             done = true;
         }
@@ -67,85 +71,122 @@ struct ComPtr {
     }
 };
 
-struct ThreadMgrEventSinkTest : public ITfThreadMgrEventSink {
-    ULONG m_refCount = 1; // Start with one reference
+struct InputScopeTest : public ITfInputScope {
+	ULONG m_refCount = 1; // Start with one reference
 
-    //
-    // IUnknown start
-    //
-    HRESULT QueryInterface(REFIID riid, void** ppvObject) override {
-        if (ppvObject == nullptr) {
-            return E_INVALIDARG;
-        }
+	//
+	// IUnknown start
+	//
+	HRESULT QueryInterface(REFIID riid, void** ppvObject) override {
+		if (ppvObject == nullptr) {
+			return E_INVALIDARG;
+		}
 
-        IUnknown* outPtr = nullptr;
-        if (riid == IID_IUnknown) {
-            outPtr = (IUnknown*)(ITextStoreACP2*)this;
-            std::cout << "Queried interface IUnknown queried" << std::endl;
-        } else if (riid == IID_ITfThreadMgrEventSink) {
-            outPtr = (ITfThreadMgrEventSink*)this;
-            std::cout << "Queried interface ITfThreadMgrEventSink queried" << std::endl;
-        }
+		IUnknown* outPtr = nullptr;
+		if (riid == IID_IUnknown || riid == IID_ITfInputScope) {
+			outPtr = (IUnknown*)(ITfInputScope*)this;
+		}
 
-        if (outPtr != nullptr) {
-            outPtr->AddRef();
-            *ppvObject = outPtr;
-            return S_OK;
-        } else {
-            *ppvObject = nullptr;
-            return E_NOINTERFACE;
-        }
-    }
+		if (outPtr != nullptr) {
+			outPtr->AddRef();
+			*ppvObject = outPtr;
+			return S_OK;
+		} else {
+			*ppvObject = nullptr;
+			return E_NOINTERFACE;
+		}
+	}
 
-    ULONG AddRef() override {
-        return InterlockedIncrement(&this->m_refCount);
-    }
+	ULONG AddRef() override {
+		return InterlockedIncrement(&this->m_refCount);
+	}
 
-    ULONG Release() override {
-        long val = InterlockedDecrement(&this->m_refCount);
-        if (val == 0) {
-            std::abort();
-        }
-        return val;
-    }
-    //
-    // IUnknown end
-    //
+	ULONG Release() override {
+		long val = InterlockedDecrement(&this->m_refCount);
+		if (val == 0) {
+			delete this;
+		}
+		return val;
+	}
+	//
+	// IUnknown end
+	//
 
-    //
-    // ITfThreadMgrEventSink start
-    //
-    HRESULT OnInitDocumentMgr(ITfDocumentMgr *pdim) override {
-        return S_OK;
-    }
+	//
+	// ITfInputScope start
+	//
+	HRESULT GetInputScopes(
+		InputScope** out_inputScopes,
+		UINT* out_count) override
+	{
+		if (out_count == nullptr || out_inputScopes == nullptr) {
+			return E_INVALIDARG;
+		}
+		*out_inputScopes = (InputScope*)CoTaskMemAlloc(sizeof(InputScope) * 1);
+		// Check if allocation failed.
+		if (!*out_inputScopes) {
+			*out_count = 0;
+			return E_OUTOFMEMORY;
+		}
 
-    HRESULT OnUninitDocumentMgr(ITfDocumentMgr *pdim) override {
-        return S_OK;
-    }
+		auto outInputScopeArray = *out_inputScopes;
 
-    HRESULT OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) override {
-        std::cout << "OnSetFocus" << std::endl;
-        return S_OK;
-    }
+		outInputScopeArray[0] = IS_TEXT;
 
-    HRESULT OnPushContext(ITfContext *pic) override {
-        return S_OK;
-    }
-
-    HRESULT OnPopContext(ITfContext* pic) override {
-        return S_OK;
-    }
-    //
-    // ITfThreadMgrEventSink end
-    //
+		*out_count = 1;
+		return S_OK;
+	}
+	HRESULT GetPhrase(BSTR** ppbstrPhrases, UINT* pcCount) override { return E_NOTIMPL; }
+	HRESULT GetRegularExpression(BSTR* pbstrRegExp) override { return E_NOTIMPL; }
+	HRESULT GetSRGS(BSTR* pbstrSRGS) override { return E_NOTIMPL; }
+	HRESULT GetXML(BSTR* pbstrXML) override { return E_NOTIMPL; }
+	//
+	// ITfInputScope end
+	//
 };
 
 struct TextStoreTest;
 
 std::string g_internalString = "";
+int g_currentSelIndex = 0;
+int g_currentSelCount = 0;
+template<class T>
+void g_Replace(int selectionIndex, int selectionCount, int newTextCount, T const* newText) {
+	auto oldStringSize = (int)g_internalString.size();
+
+	if (selectionCount < newTextCount) {
+		// The incoming text is larger than the existing stuff. So we need to move
+		// some content towards end of buffer.
+		auto countDifference = (int)(newTextCount - selectionCount);
+		// We need to resize our string so we can fit all the content.
+		g_internalString.resize(oldStringSize + countDifference);
+		// Our string is growing overall, we need to shift end elements to the right.
+		// To shift them to the right, we have to start iterating on the end side of the buffer.
+		for (int i = oldStringSize; i > selectionIndex + selectionCount; i--) {
+			g_internalString[i + countDifference] = g_internalString[i];
+		}
+	} else {
+		// Our string is shrinking overall, we need to shift end elements to the left.
+		std::abort();
+	}
+
+	// Then we can copy over the region we wanted to place.
+	for (int i = 0; i < newTextCount; i++) {
+		g_internalString[i + selectionIndex] = (char)newText[i];
+	}
+
+	std::cout << "Current text: '" << g_internalString << "'" << std::endl;
+}
+template<class T>
+void g_Replace(int newTextCount, T const* newText) {
+	g_Replace(g_currentSelIndex, g_currentSelCount, newTextCount, newText);
+	g_currentSelIndex += newTextCount;
+	g_currentSelCount = 0;
+}
+
 TextStoreTest* g_textStore = nullptr;
 
-enum class HResult_Helper {
+enum class HResult_Helper : long long {
     Ok = S_OK,
     S_False = S_FALSE,
     E_InvalidArg = E_INVALIDARG,
@@ -181,6 +222,9 @@ struct TextStoreTest :
     LockFlag current_lock_type_ = LockFlag::None;
     DWORD pendingAsyncLock = 0;
 
+	std::vector<TS_ATTRID> requestedAttrs;
+	bool requestAttrWantFlag = false;
+
     [[nodiscard]] auto HasReadLock() const {
         return
             ((unsigned int)current_lock_type_ & TS_LF_READ) != 0 ||
@@ -204,18 +248,12 @@ struct TextStoreTest :
         }
 
         IUnknown* outPtr = nullptr;
-        if (riid == IID_IUnknown) {
+        if (riid == IID_IUnknown || riid == IID_ITextStoreACP2) {
             outPtr = (IUnknown*)(ITextStoreACP2*)this;
-            std::cout << "Queried interface IUnknown queried" << std::endl;
-        } else if (riid == IID_ITextStoreACP2) {
-            outPtr = (ITextStoreACP2*)this;
-            std::cout << "Queried interface ITextStoreACP2 queried" << std::endl;
         } else if (riid == IID_ITfContextOwnerCompositionSink) {
             outPtr = (ITfContextOwnerCompositionSink*)this;
-            std::cout << "Queried interface ITfContextOwnerCompositionSink " << std::endl;
         } else if (riid == IID_ITfTextEditSink) {
             outPtr = (ITfTextEditSink*)this;
-            std::cout << "Queried interface ITfTextEditSink" << std::endl;
         }
 
         if (outPtr != nullptr) {
@@ -248,8 +286,13 @@ struct TextStoreTest :
     // TextStoreTest start
     //
     HRESULT AdviseSink(REFIID iid, IUnknown* unknown, DWORD mask) override {
-        if (!IsEqualGUID(iid, IID_ITextStoreACPSink))
+        if (iid != IID_ITextStoreACPSink)
             return E_INVALIDARG;
+
+
+
+		if (FAILED(unknown->QueryInterface(IID_PPV_ARGS(&this->currentSink))))
+			return E_UNEXPECTED;
         if (this->currentSink != nullptr) {
             if (this->currentSink == unknown) {
                 this->currentSinkMask = mask;
@@ -258,8 +301,7 @@ struct TextStoreTest :
                 return CONNECT_E_ADVISELIMIT;
             }
         }
-        if (FAILED(unknown->QueryInterface(IID_PPV_ARGS(&this->currentSink))))
-            return E_UNEXPECTED;
+
         this->currentSinkMask = mask;
         return S_OK;
     }
@@ -275,15 +317,6 @@ struct TextStoreTest :
     };
     HRESULT RequestLock(DWORD newLockFlagsIn, HRESULT *out_hrSession) override {
         auto newLockFlags = (LockFlag)newLockFlagsIn;
-
-        std::cout << "RequestLock";
-        if ((newLockFlagsIn & TS_LF_SYNC) != 0)
-            std::cout << " SYNC";
-        if ((newLockFlagsIn & TS_LF_READ) != 0)
-            std::cout << " READ";
-        if ((newLockFlagsIn & TS_LF_READWRITE) != 0)
-            std::cout << " READWRITE";
-        std::cout << std::endl;
 
         if (!this->currentSink)
             return E_FAIL;
@@ -311,6 +344,8 @@ struct TextStoreTest :
         *out_hrSession = this->currentSink->OnLockGranted((DWORD)current_lock_type_);
         // Unlock
         this->current_lock_type_ = LockFlag::None;
+
+
         // Handles the pending lock requests.
         if (this->pendingAsyncLock != 0) {
             this->current_lock_type_ = (LockFlag)this->pendingAsyncLock;
@@ -319,6 +354,7 @@ struct TextStoreTest :
         }
 
         return S_OK;
+
     }
     HRESULT GetStatus(TS_STATUS* out_status) override {
         if (!out_status)
@@ -359,11 +395,14 @@ struct TextStoreTest :
             return E_INVALIDARG;
         if (!this->HasReadLock())
             return TS_E_NOLOCK;
+		if (selectionIndex != TS_DEFAULT_SELECTION) {
+			std::abort();
+		}
         *out_fetchedCount = 0;
         if ((selectionBufferSize > 0) &&
             ((selectionIndex == 0) || (selectionIndex == TS_DEFAULT_SELECTION))) {
-            out_selections[0].acpStart = (LONG)g_internalString.size();
-            out_selections[0].acpEnd = (LONG)g_internalString.size();
+            out_selections[0].acpStart = (LONG)g_currentSelIndex;
+            out_selections[0].acpEnd = (LONG)g_currentSelIndex + (LONG)g_currentSelCount;
             out_selections[0].style.ase = TS_AE_END;
             out_selections[0].style.fInterimChar = FALSE;
             *out_fetchedCount = 1;
@@ -372,11 +411,21 @@ struct TextStoreTest :
     }
 
     HRESULT SetSelection(
-            ULONG ulCount,
-            TS_SELECTION_ACP const* pSelection) override
+		ULONG ulCount,
+		TS_SELECTION_ACP const* pSelections) override
     {
-        std::abort();
-        return E_NOTIMPL;
+        if (ulCount == 0)
+			return S_OK;
+
+		if (pSelections == nullptr) {
+			return E_INVALIDARG;
+		}
+
+		auto const& selection = pSelections[0];
+		g_currentSelIndex = selection.acpStart;
+		g_currentSelCount = selection.acpEnd - selection.acpStart;
+
+        return S_OK;
     }
 
     HRESULT GetText(
@@ -410,7 +459,6 @@ struct TextStoreTest :
         if (out_pchPlain == nullptr && cchPlainReq > 0) {
             return E_INVALIDARG;
         }
-
 
         int startIndex = acpStart;
         int endIndex = acpEnd;
@@ -463,46 +511,19 @@ struct TextStoreTest :
         if (acpEnd < 0)
             std::abort();
 
+		g_Replace(acpStart, acpEnd - acpStart, (int)newTextCount, newText);
 
-        char tempText[128] = {};
-        if (newTextCount > 128)
-            std::abort();
-        for (int i = 0; i < newTextCount; i++) {
-            tempText[i] = (char)newText[i];
-        }
-        std::cout.write(tempText, newTextCount);
-        std::cout << std::endl;
-
-        auto acpCount = (int)(acpEnd - acpStart);
-        auto oldStringSize = (int)g_internalString.size();
-
-        if (acpCount < newTextCount) {
-            auto countDifference = (int)(newTextCount - acpCount);
-            // We need to resize our string so we can fit all the content.
-            g_internalString.resize(oldStringSize + countDifference);
-            // Our string is growing overall, we need to shift end elements to the right.
-            // To shift them to the right, we have to start iterating on the end side of the buffer.
-            for (int i = oldStringSize; i > acpEnd; i--) {
-                g_internalString[i + countDifference] = g_internalString[i];
-            }
-        } else {
-            // Our string is shrinking overall, we need to shift end elements to the left.
-            std::abort();
-        }
-
-        // Then we can copy over the region we wanted to place.
-        for (int i = 0; i < acpCount; i++) {
-            g_internalString[i + acpStart] = (char)newText[i];
-        }
-
+		out_change->acpStart = acpStart;
+		out_change->acpOldEnd = acpEnd;
+		out_change->acpNewEnd = acpStart + (LONG)newTextCount;
 
         return S_OK;
     }
 
     HRESULT GetFormattedText(
-            LONG acpStart,
-            LONG acpEnd,
-            IDataObject** ppDataObject) override
+		LONG acpStart,
+		LONG acpEnd,
+		IDataObject** ppDataObject) override
     {
         std::abort();
         if (ppDataObject == nullptr)
@@ -574,38 +595,98 @@ struct TextStoreTest :
         return E_NOTIMPL;
     }
 
+
     HRESULT RequestSupportedAttrs(
         DWORD dwFlags,
-        ULONG cFilterAttrs,
-        TS_ATTRID const* paFilterAttrs) override
+        ULONG attrBufferSize,
+        TS_ATTRID const* attrBuffer) override
     {
-        if ((dwFlags & TS_ATTR_FIND_WANT_VALUE) > 0) {
-            std::abort();
+		if (attrBufferSize != 0 && attrBuffer == nullptr) {
+			return E_INVALIDARG;
+		}
+
+		this->requestAttrWantFlag = false;
+        if ((dwFlags & TS_ATTR_FIND_WANT_VALUE) != 0) {
+            this->requestAttrWantFlag = true;
         }
+
+		this->requestedAttrs.clear();
+		for (int i = 0; i < (int)attrBufferSize; i++) {
+			auto const& attr = attrBuffer[i];
+			if (attr == GUID_PROP_INPUTSCOPE) {
+				this->requestedAttrs.push_back(attr);
+			}
+		}
 
         return S_OK;
     }
 
     HRESULT RetrieveRequestedAttrs(
-        ULONG ulCount,
-        TS_ATTRVAL* out_paAttrVals,
-        ULONG* out_pcFetched) override
+        ULONG attrValsCapacity,
+        TS_ATTRVAL* out_AttrVals,
+        ULONG* out_AttrValsFetched) override
     {
-        if (ulCount == 0 || out_paAttrVals == nullptr || out_pcFetched == nullptr) {
-            return E_INVALIDARG;
-        }
-        *out_pcFetched = 0;
+		if (out_AttrValsFetched == nullptr) {
+			return E_INVALIDARG;
+		}
+		if (attrValsCapacity == 0) {
+			*out_AttrValsFetched = 0;
+			return S_OK;
+		}
+
+		// If we reached this branch, it means capacity is not zero, in which case the pointer can't be null.
+		if (out_AttrVals == nullptr) {
+			return E_INVALIDARG;
+		}
+
+		*out_AttrValsFetched = (ULONG)this->requestedAttrs.size();
+		if (*out_AttrValsFetched > attrValsCapacity) {
+			*out_AttrValsFetched = attrValsCapacity;
+		}
+
+		for (int i = 0; i < *out_AttrValsFetched; i++) {
+			auto& outAttr = out_AttrVals[i];
+			auto const& requestedAttr = this->requestedAttrs[i];
+
+			// This should be set to 0 when using TSF.
+			outAttr.dwOverlapId = 0;
+			outAttr.idAttr = requestedAttr;
+
+			if (this->requestAttrWantFlag) {
+				outAttr.varValue.vt = VT_EMPTY;
+			} else {
+				outAttr.varValue.vt = VT_UNKNOWN;
+				outAttr.varValue.punkVal = new InputScopeTest;
+			}
+		}
+
         return S_OK;
     }
 
     HRESULT RequestAttrsAtPosition(
         LONG acpPos,
-        ULONG cFilterAttrs,
-        TS_ATTRID const* paFilterAttrs,
+        ULONG attrBufferSize,
+        TS_ATTRID const* attrBuffer,
         DWORD dwFlags) override
     {
-        std::abort();
-        return E_NOTIMPL;
+		if (attrBufferSize != 0 && attrBuffer == nullptr) {
+			return E_INVALIDARG;
+		}
+
+		this->requestAttrWantFlag = false;
+		if ((dwFlags & TS_ATTR_FIND_WANT_VALUE) != 0) {
+			this->requestAttrWantFlag = true;
+		}
+
+		this->requestedAttrs.clear();
+		for (int i = 0; i < (int)attrBufferSize; i++) {
+			auto const& attr = attrBuffer[i];
+			if (attr == GUID_PROP_INPUTSCOPE) {
+				this->requestedAttrs.push_back(attr);
+			}
+		}
+
+		return S_OK;
     }
 
     HRESULT RequestAttrsTransitioningAtPosition(
@@ -660,9 +741,9 @@ struct TextStoreTest :
         if (out_Acp == nullptr) {
             return E_INVALIDARG;
         }
-        *out_Acp = 0;
+        *out_Acp = (LONG)g_internalString.size();
 
-        return E_NOTIMPL;
+        return S_OK;
     }
 
     HRESULT GetTextExt(
@@ -685,7 +766,7 @@ struct TextStoreTest :
         out_rect->left = point.x;
         out_rect->top = point.y;
         out_rect->right = out_rect->left + 100;
-        out_rect->bottom = out_rect->top - 100;
+        out_rect->bottom = out_rect->top + 100;
 
         *out_fClipped = false;
 
@@ -709,7 +790,7 @@ struct TextStoreTest :
         out_rect->left = point.x;
         out_rect->top = point.y;
         out_rect->right = out_rect->left + 100;
-        out_rect->bottom = out_rect->top - 100;
+        out_rect->bottom = out_rect->top + 100;
 
         return S_OK;
     }
@@ -754,74 +835,6 @@ struct TextStoreTest :
         ITfEditRecord* pEditRecord) override
     {
         std::cout << "OnEndEdit" << std::endl;
-
-        if (context == nullptr || pEditRecord == nullptr)
-            return E_INVALIDARG;
-
-        BOOL selectionChanged = {};
-        auto hr = (HResult_Helper)pEditRecord->GetSelectionStatus(&selectionChanged);
-        if (hr != HResult_Helper::Ok)
-            std::abort();
-
-        IEnumTfRanges* enumTfRangesTemp = nullptr;
-        hr = (HResult_Helper)pEditRecord->GetTextAndPropertyUpdates(
-            TF_GTP_INCL_TEXT,
-            nullptr, 0,
-            &enumTfRangesTemp);
-        if (hr != HResult_Helper::Ok)
-            std::abort();
-        auto enumTfRanges = ComPtr{ enumTfRangesTemp };
-
-        ITfRange* ranges = nullptr;
-        ULONG fetchedRangesCount = 0;
-        hr = (HResult_Helper)enumTfRanges->Next(5, &ranges, &fetchedRangesCount);
-        if (hr != HResult_Helper::Ok && hr != HResult_Helper::S_False)
-            std::abort();
-
-        if (fetchedRangesCount > 0) {
-            auto& range = ranges[0];
-
-            void* rangeAcpTemp = nullptr;
-            hr = (HResult_Helper)range.QueryInterface(IID_ITfRangeACP, &rangeAcpTemp);
-            if (hr != HResult_Helper::Ok)
-                std::abort();
-            auto rangeAcp = ComPtr{ (ITfRangeACP*)rangeAcpTemp };
-
-            LONG startIndex = 0;
-            LONG count = 0;
-            hr = (HResult_Helper)rangeAcp->GetExtent(&startIndex, &count);
-            if (hr != HResult_Helper::Ok)
-                std::abort();
-
-            WCHAR outString[128] = {};
-            ULONG fetchedCharCount = 0;
-
-            hr = (HResult_Helper)range.GetText(
-                ecReadOnly,
-                0,
-                outString,
-                128,
-                &fetchedCharCount);
-            if (hr != HResult_Helper::Ok)
-                std::abort();
-
-            char outString_char[128] = {};
-            for (int i = 0; i < (int)fetchedCharCount; i++)
-                outString_char[i] = (char)outString[i];
-
-            if (fetchedCharCount > 0) {
-                // We only handle pushing to end
-                std::cout << "OnEndEdit text: ";
-                std::cout.write(outString_char, fetchedCharCount);
-                std::cout << std::endl;
-            }
-        }
-
-
-        for (int i = 0; i < (int)fetchedRangesCount; i++) {
-            ranges[i].Release();
-        }
-
         return S_OK;
     }
     //
@@ -835,10 +848,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CHAR: {
 
             char character = (char)wParam;
-            auto oldStringLength = (int)g_internalString.size();
-            g_internalString.push_back(character);
-            auto newStringLength = (int)g_internalString.size();
-            std::cout << "Current text: " << g_internalString << std::endl;
+			auto oldSelIndex = g_currentSelIndex;
+			auto oldSelCount = g_currentSelCount;
+			g_Replace(1, &character);
+
             if (g_textStore->currentSink) {
                 auto& sink = *g_textStore->currentSink;
                 auto hr = (HResult_Helper)sink.OnStartEditTransaction();
@@ -847,9 +860,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
 
                 TS_TEXTCHANGE textChangeRange = {};
-                textChangeRange.acpStart = oldStringLength;
-                textChangeRange.acpOldEnd = oldStringLength;
-                textChangeRange.acpNewEnd = newStringLength;
+                textChangeRange.acpStart = oldSelCount;
+                textChangeRange.acpOldEnd = oldSelIndex + oldSelCount;
+                textChangeRange.acpNewEnd = oldSelIndex + 1;
                 hr = (HResult_Helper)sink.OnTextChange(0, &textChangeRange);
                 if (hr != HResult_Helper::Ok) {
                     std::abort();
@@ -918,6 +931,44 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         hInstance,
         nullptr);
     ShowWindow(hwnd, nCmdShow);
+	SendMessage(hwnd, EM_SETEDITSTYLE, SES_USECTF, SES_USECTF);
+
+	/*
+	HWND hwndEdit = CreateWindowExW(
+		0,
+		MSFTEDIT_CLASS,
+		L"Type here",
+	  	ES_MULTILINE | WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP,
+		CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800,
+		hwnd,
+		nullptr,
+		hInstance,
+		nullptr);
+	ShowWindow(hwndEdit, nCmdShow);
+	 */
+
+	auto hr = HResult_Helper::Ok;
+
+	ITfInputProcessorProfiles* inputProcProfiles = nullptr;
+	ITfInputProcessorProfileMgr* inputProcProfilesMgr = nullptr;
+	{
+		hr = (HResult_Helper)CoCreateInstance(
+			CLSID_TF_InputProcessorProfiles,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			IID_PPV_ARGS(&inputProcProfiles));
+		if (hr != HResult_Helper::Ok) {
+			std::abort();
+		}
+
+		void* tempPtr = nullptr;
+		hr = (HResult_Helper)inputProcProfiles->QueryInterface(IID_ITfInputProcessorProfileMgr, &tempPtr);
+		if (hr != HResult_Helper::Ok) {
+			std::abort();
+		}
+		inputProcProfilesMgr = (ITfInputProcessorProfileMgr*)tempPtr;
+	}
+
 
     ITfThreadMgr* threadMgr = nullptr;
     ITfThreadMgr2* threadMgr2 = nullptr;
@@ -947,13 +998,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 
     TfClientId clientId = {};
-    auto hr = (HResult_Helper)threadMgr2->Activate(&clientId);
+    hr = (HResult_Helper)threadMgr2->Activate(&clientId);
     if (hr != HResult_Helper::Ok) {
         std::abort();
     }
-
-    auto threadMgrEventSink = new ThreadMgrEventSinkTest;
-    hr = (HResult_Helper)threadMgrSource->AdviseSingleSink(clientId, IID_ITfThreadMgrEventSink, threadMgrEventSink);
 
     ITfDocumentMgr* docMgr = nullptr;
     hr = (HResult_Helper)threadMgr2->CreateDocumentMgr(&docMgr);
@@ -997,7 +1045,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     if (g_textStore->currentSink != nullptr) {
         auto& sink = *g_textStore->currentSink;
-        auto hr = (HResult_Helper)sink.OnStartEditTransaction();
+        hr = (HResult_Helper)sink.OnStartEditTransaction();
         if (hr != HResult_Helper::Ok) {
             std::abort();
         }
@@ -1027,14 +1075,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     }
 
-    /*
+
     hr = (HResult_Helper)threadMgr2->SetFocus(docMgr);
     if (hr != HResult_Helper::Ok) {
         std::abort();
     }
-     */
+	/*
     ITfDocumentMgr* oldDocMgr = nullptr;
     threadMgr->AssociateFocus(hwnd, docMgr, &oldDocMgr);
+     */
 
     MSG msg = {};
     while (true) {
