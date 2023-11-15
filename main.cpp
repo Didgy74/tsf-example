@@ -17,6 +17,8 @@
 
 int viewId = 1;
 auto englishLangId = 0x0409;
+int charSize = 28;
+int widgetSize = 600;
 
 struct InputScopeTest : public ITfInputScope {
 	ULONG m_refCount = 1; // Start with one reference
@@ -715,7 +717,7 @@ struct TextStoreTest :
 
         *out_Acp = (LONG)0;
 
-        return E_NOTIMPL;
+        return S_OK;
     }
 
     HRESULT GetTextExt(
@@ -725,7 +727,6 @@ struct TextStoreTest :
         RECT* out_rect,
         BOOL* out_fClipped) override
     {
-		//return E_NOTIMPL;
         if (out_rect == nullptr || out_fClipped == nullptr) {
             return E_INVALIDARG;
         }
@@ -736,12 +737,25 @@ struct TextStoreTest :
             return E_FAIL;
         }
 
-        out_rect->left = point.x;
-        out_rect->top = point.y;
-        out_rect->right = out_rect->left + 100;
-        out_rect->bottom = out_rect->top + 100;
+    	auto acpCount = acpEnd - acpStart;
+    	if (acpCount < 0 || acpCount > g_internalString.size()) {
+    		std::abort();
+    	}
 
+        out_rect->left = point.x + charSize * acpStart;
+        out_rect->top = point.y;
+        out_rect->right = out_rect->left + charSize * acpCount;
+        out_rect->bottom = out_rect->top + charSize;
+
+
+    	// Check if the total text bounds are outside our widget-size.
+    	auto textWidth = charSize * g_internalString.size();
+    	auto textHeight = charSize;
         *out_fClipped = false;
+    	if (textWidth > widgetSize || textHeight > widgetSize) {
+    		*out_fClipped = true;
+    	}
+
 
         return S_OK;
     }
@@ -763,8 +777,8 @@ struct TextStoreTest :
 
         out_rect->left = point.x;
         out_rect->top = point.y;
-        out_rect->right = out_rect->left + 100;
-        out_rect->bottom = out_rect->top + 100;
+        out_rect->right = out_rect->left + widgetSize;
+        out_rect->bottom = out_rect->top + widgetSize;
 
         return S_OK;
     }
@@ -822,6 +836,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	TS_TEXTCHANGE textChangeRange = {};
 
     switch (msg) {
+    	/*
     	case WM_GETOBJECT: {
     		if ((DWORD)lParam == UiaRootObjectId && perWindowDataBackend.accessProvider != nullptr) { // UI Automation request
     			return backendData.uiAutomationFnPtrs.UiaReturnRawElementProvider(
@@ -832,6 +847,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     		}
     		break;
     	}
+    	*/
 
 		case WM_KEYDOWN: {
 			if (wParam == VK_BACK) {
