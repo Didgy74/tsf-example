@@ -18,36 +18,6 @@
 int viewId = 1;
 auto englishLangId = 0x0409;
 
-template<class T> requires (std::derived_from<T, IUnknown>)
-struct ComPtr {
-    ComPtr() = default;
-    ComPtr(ComPtr const&) = delete;
-    ComPtr(ComPtr&&) = delete;
-    explicit ComPtr(T* input) : internalPtr_{ input } {}
-
-    ComPtr& operator=(ComPtr const&) = delete;
-    ComPtr& operator=(ComPtr&&) = delete;
-
-    T* internalPtr_ = nullptr;
-
-    [[nodiscard]] T* operator->() noexcept {
-        return internalPtr_;
-    }
-
-    [[nodiscard]] T const* operator->() const noexcept {
-        return internalPtr_;
-    }
-
-    ~ComPtr() {
-        if (internalPtr_ != nullptr) {
-            auto temp = (IUnknown*)internalPtr_;
-            auto test = temp->Release();
-            int i = 0;
-        }
-        internalPtr_ = nullptr;
-    }
-};
-
 struct InputScopeTest : public ITfInputScope {
 	ULONG m_refCount = 1; // Start with one reference
 
@@ -816,13 +786,11 @@ struct TextStoreTest :
 
     HRESULT OnUpdateComposition(ITfCompositionView* pComposition, ITfRange *pRangeNew) override
     {
-        std::cout << "OnUpdateComposition" << std::endl;
         return S_OK;
     }
 
     HRESULT OnEndComposition(ITfCompositionView* pComposition) override
     {
-        std::cout << "OnEndComposition" << std::endl;
         return S_OK;
     }
     //
@@ -854,6 +822,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	TS_TEXTCHANGE textChangeRange = {};
 
     switch (msg) {
+    	case WM_GETOBJECT: {
+    		if ((DWORD)lParam == UiaRootObjectId && perWindowDataBackend.accessProvider != nullptr) { // UI Automation request
+    			return backendData.uiAutomationFnPtrs.UiaReturnRawElementProvider(
+					hwnd,
+					wParam,
+					lParam,
+					perWindowDataBackend.accessProvider);
+    		}
+    		break;
+    	}
+
 		case WM_KEYDOWN: {
 			if (wParam == VK_BACK) {
 				if (g_currentSelCount != 0) {
@@ -883,7 +862,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					G_UpdateSelection(0, (int)g_internalString.size());
 				}
 			}
-
 		}
 
     	break;
