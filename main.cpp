@@ -149,7 +149,7 @@ void G_UpdateSelection(int selIndex, int selCount) {
 // Returns true if the string somehow changed.
 template<class T>
 bool g_Replace(int selIndex, int selCount, int newTextCount, T const* newText) {
-	if (selIndex + selCount > g_internalString.size()) {
+	if (selIndex > g_internalString.size()) {
 		std::abort();
 	}
 
@@ -607,7 +607,9 @@ struct TextStoreTest :
 			// Print our new text
 			std::cout << " - Result '";
 			std::cout << g_internalString;
+			std::cout << "'";
 			std::cout << std::endl;
+			/*
     		if (this->currentSink != nullptr) {
 				// Do we need this?
     			auto& sink = *this->currentSink;
@@ -620,6 +622,7 @@ struct TextStoreTest :
     				std::abort();
     			}
     		}
+    		*/
     	});
 
 		out_change->acpStart = acpStart;
@@ -695,8 +698,13 @@ struct TextStoreTest :
 
 		this->text.UpdateSelection(selection.acpStart, selection.acpEnd - selection.acpStart);
 		DeferFn([=] {
-			std::cout << tsf_example::OutputIndents() << "Deferred SetSelection" << std::endl;
+			std::cout << tsf_example::OutputIndents() << "Deferred SetSelection - ";
+			std::cout << selection.acpStart;
+			std::cout << "'";
+			std::cout << selection.acpEnd;
+			std::cout << std::endl;
 			G_UpdateSelection(selection.acpStart, selection.acpEnd - selection.acpStart);
+			/*
 			if (this->currentSink != nullptr) {
 				auto& sink = *this->currentSink;
 				auto hr = (HResult_Helper)sink.OnSelectionChange();
@@ -704,6 +712,7 @@ struct TextStoreTest :
 					std::abort();
 				}
 			}
+			 */
 		});
 
     	return S_OK;
@@ -914,10 +923,18 @@ struct TextStoreTest :
     }
 
     HRESULT GetActiveView(TsViewCookie* outPvcView) override {
-        if (outPvcView == nullptr)
-            return E_INVALIDARG;
+		std::cout << tsf_example::OutputIndents() << "GetActiveView";
+		Defer _ = []{ std::cout << std::endl; };
+
+        if (outPvcView == nullptr) {
+			std::cout << " - Error";
+			return E_INVALIDARG;
+		}
+
 
         *outPvcView = viewId;
+		std::cout << " - ";
+		std::cout << *outPvcView;
         return S_OK;
     }
 
@@ -927,7 +944,10 @@ struct TextStoreTest :
         DWORD dwFlags,
         LONG* out_Acp) override
     {
+		std::cout << "GetACPFromPoint";
+		Defer _ = []{ std::cout << std::endl; };
         if (out_Acp == nullptr) {
+			std::cout << " - Error";
             return E_INVALIDARG;
         }
 
@@ -993,16 +1013,17 @@ struct TextStoreTest :
         TsViewCookie vcView,
         RECT* out_rect) override
     {
-		std::cout << tsf_example::OutputIndents() << "GetScreenExt" << std::endl;
-
-		//return E_NOTIMPL;
+		std::cout << tsf_example::OutputIndents() << "GetScreenExt";
+		Defer _ = []{ std::cout << std::endl; };
         if (out_rect == nullptr) {
+			std::cout << " - Error";
             return E_INVALIDARG;
         }
 
         POINT point = {};
         bool success = ClientToScreen(this->hwnd, &point);
         if (!success) {
+			std::cout << " - Error";
             return E_FAIL;
         }
 
@@ -1022,9 +1043,12 @@ struct TextStoreTest :
     //
     HRESULT OnStartComposition(ITfCompositionView* pComposition, BOOL* out_ok) override
     {
-		std::cout << tsf_example::OutputIndents() << "OnStartComposition" << std::endl;
-        if (pComposition == nullptr || out_ok == nullptr)
-            return E_INVALIDARG;
+		std::cout << tsf_example::OutputIndents() << "OnStartComposition";
+		Defer _ = []{ std::cout << std::endl; };
+        if (pComposition == nullptr || out_ok == nullptr) {
+			std::cout << " - Error";
+			return E_INVALIDARG;
+		}
 
         *out_ok = true;
         return S_OK;
@@ -1055,7 +1079,7 @@ struct TextStoreTest :
         ITfEditRecord* pEditRecord) override
     {
         std::cout << tsf_example::OutputIndents() << "OnEndEdit" << std::endl;
-
+		/*
     	BOOL selectionChanged = false;
     	pEditRecord->GetSelectionStatus(&selectionChanged);
 
@@ -1078,6 +1102,7 @@ struct TextStoreTest :
     		}
 
     	}
+    	*/
 
         return S_OK;
     }
@@ -1107,6 +1132,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					// Select all text
 					DeferFn([] {
 						G_UpdateSelection(0, (int)g_internalString.size());
+						g_textStore->text.UpdateSelection(0, (int)g_internalString.size());
 						if (g_textStore->currentSink != nullptr) {
 							auto hr = (HResult_Helper)g_textStore->currentSink->OnSelectionChange();
 							if (hr != HResult_Helper::Ok) {
@@ -1114,70 +1140,50 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							}
 						}
 					});
-				}
-			}
-
-			if (wParam == 'C') {
-				if (GetKeyState(VK_CONTROL) & 0x8000) {
-					// Clear the console
-					system("cls");
 				}
 			}
 		}
 
     	break;
         case WM_CHAR: {
+			auto oldSelIndex = g_currentSelIndex;
+			auto oldSelCount = g_currentSelCount;
 			auto character = (char)wParam;
         	if (character == '\b') {
-        		if (g_currentSelCount != 0) {
+        		if (oldSelCount != 0) {
 					DeferFn([=] {
-						g_Replace(g_currentSelIndex, g_currentSelCount, 0, (char*)nullptr);
-					});
-					// Replace the text in our text-store.
-					g_textStore->text.Replace(g_currentSelIndex, g_currentSelCount, 0, (char*)nullptr);
-					if (g_textStore->currentSink != nullptr) {
-						TS_TEXTCHANGE textChangeRange = {};
-						textChangeRange.acpStart = g_currentSelIndex;
-						textChangeRange.acpOldEnd = g_currentSelIndex + g_currentSelCount;
-						textChangeRange.acpNewEnd = g_currentSelIndex;
-						auto hr = (HResult_Helper)g_textStore->currentSink->OnTextChange(0, &textChangeRange);
-						if (hr != HResult_Helper::Ok) {
-							std::abort();
-						}
-					}
-
-        			DeferFn([] {
-        				G_UpdateSelection(g_currentSelIndex, 0);
-        				if (g_textStore->currentSink != nullptr) {
-        					auto hr = (HResult_Helper)g_textStore->currentSink->OnSelectionChange();
+						g_Replace(oldSelIndex, oldSelCount, 0, (char*)nullptr);
+						g_textStore->text.Replace(oldSelIndex, oldSelCount, 0, (char*)nullptr);
+						G_UpdateSelection(oldSelIndex, 0);
+						g_textStore->text.UpdateSelection(oldSelIndex, 0);
+						if (g_textStore->currentSink != nullptr) {
+							TS_TEXTCHANGE textChangeRange = {};
+							textChangeRange.acpStart = oldSelIndex;
+							textChangeRange.acpOldEnd = oldSelIndex + oldSelCount;
+							textChangeRange.acpNewEnd = oldSelIndex;
+							auto hr = (HResult_Helper)g_textStore->currentSink->OnTextChange(0, &textChangeRange);
 							if (hr != HResult_Helper::Ok) {
 								std::abort();
 							}
-        				}
+						}
 					});
-        		} else if (g_currentSelIndex != 0) {
+        		} else if (oldSelIndex != 0) {
         			// Count is 0
         			DeferFn([=] {
-						 g_Replace(g_currentSelIndex - 1, 1, 0, (char*)nullptr);
+						g_Replace(oldSelIndex - 1, 1, 0, (char*)nullptr);
+						g_textStore->text.Replace(oldSelIndex - 1, 1, 0, (char*)nullptr);
+						G_UpdateSelection(oldSelIndex - 1, 0);
+						g_textStore->text.UpdateSelection(oldSelIndex - 1, 0);
 						 if (g_textStore->currentSink != nullptr) {
 							 TS_TEXTCHANGE textChangeRange = {};
-							 textChangeRange.acpStart = g_currentSelIndex - 1;
-							 textChangeRange.acpOldEnd = g_currentSelIndex + 1;
-							 textChangeRange.acpNewEnd = g_currentSelIndex - 1;
+							 textChangeRange.acpStart = oldSelIndex - 1;
+							 textChangeRange.acpOldEnd = oldSelIndex + 1;
+							 textChangeRange.acpNewEnd = oldSelIndex - 1;
 							 auto hr = (HResult_Helper)g_textStore->currentSink->OnTextChange(0, &textChangeRange);
 							 if (hr != HResult_Helper::Ok) {
 								 std::abort();
 							 }
 						 }
-					 });
-        			DeferFn([] {
-						G_UpdateSelection(g_currentSelIndex - 1, 0);
-						if (g_textStore->currentSink != nullptr) {
-							auto hr = (HResult_Helper)g_textStore->currentSink->OnSelectionChange();
-							if (hr != HResult_Helper::Ok) {
-								std::abort();
-							}
-						}
 					});
         		}
         		break;
@@ -1187,26 +1193,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				break;
 			}
 
-DeferFn([=] {
-	auto oldSelIndex = g_currentSelIndex;
-	auto oldSelCount = g_currentSelCount;
-	g_Replace(oldSelIndex, oldSelCount, 1, &character);
-	g_textStore->text.Replace(oldSelIndex, oldSelCount, 1, &character);
-	G_UpdateSelection(oldSelIndex + 1, 0);
-	g_textStore->text.UpdateSelection(oldSelIndex + 1, 0);
-	if (g_textStore->currentSink != nullptr) {
-		auto& sink = *g_textStore->currentSink;
-		auto hr = HResult_Helper::Ok;
-		TS_TEXTCHANGE textChangeRange = {};
-		textChangeRange.acpStart = oldSelCount;
-		textChangeRange.acpOldEnd = oldSelIndex + oldSelCount;
-		textChangeRange.acpNewEnd = oldSelIndex + 1;
-		hr = (HResult_Helper)sink.OnTextChange(0, &textChangeRange);
-		if (hr != HResult_Helper::Ok) {
-			std::abort();
-		}
-	}
-});
+			DeferFn([=] {
+				g_Replace(oldSelIndex, oldSelCount, 1, &character);
+				g_textStore->text.Replace(oldSelIndex, oldSelCount, 1, &character);
+				G_UpdateSelection(oldSelIndex + 1, 0);
+				g_textStore->text.UpdateSelection(oldSelIndex + 1, 0);
+				if (g_textStore->currentSink != nullptr) {
+					auto& sink = *g_textStore->currentSink;
+					auto hr = HResult_Helper::Ok;
+					TS_TEXTCHANGE textChangeRange = {};
+					textChangeRange.acpStart = oldSelCount;
+					textChangeRange.acpOldEnd = oldSelIndex + oldSelCount;
+					textChangeRange.acpNewEnd = oldSelIndex + 1;
+					hr = (HResult_Helper)sink.OnTextChange(0, &textChangeRange);
+					if (hr != HResult_Helper::Ok) {
+						std::abort();
+					}
+				}
+			});
         }
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);

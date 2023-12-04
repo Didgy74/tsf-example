@@ -10,7 +10,7 @@ Not yet finished
 
 
 # Notes
-## Appending arbitrary text not initiated by a correction (SetText event)
+## Appending text not initiated by a correction (SetText event)
 When appending text like this, i.e when pressing a single character button, you need to update your
 source text *and* your source selection values *before* sending the OnTextChange event to the TSF sink.
 Below is an example of pushing a single character to the text-edit session.
@@ -80,7 +80,8 @@ DeferFn([=] {
 	}
 });
 ```
-### Why it has to be this way
+
+### But why
 When inspecting the order in which TSF API calls method on our TextStore in response to our OnTextChange event, 
 we can spot the following:
 ```
@@ -93,3 +94,8 @@ RequestLock end
 This happens when we only press the letter 'h' on the keyboard. Take note that TSF will call GetSelection first.
 It is *critical* that this function returns the updated selection values. It *will* break if you try to instead update it 
 with a OnSelectionChange event after the fact!
+
+
+# Handling SetText in deferred context
+Every call to SetText is immediately followed up by GetText. The same applies to SetSelection.
+It may also be immediately followed up by GetTextExt.
