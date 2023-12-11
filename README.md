@@ -9,8 +9,7 @@ for Windows Speech Recognition.
 Not yet finished
 
 
-# Notes
-## Appending text not initiated by a correction (SetText event)
+# Appending text not initiated by a correction (SetText event)
 When appending text like this, i.e when pressing a single character button, you need to update your
 source text *and* your source selection values *before* sending the OnTextChange event to the TSF sink.
 Below is an example of pushing a single character to the text-edit session.
@@ -40,7 +39,6 @@ DeferFn([=] {
 			std::abort();
 		}
 	}
-
 });
 ```
 ## Example that does not work
@@ -49,7 +47,7 @@ Below is an example of something that **does not work**. Here the operation is
 2. Send text event to TSF
 3. Modify source selection
 4. Send selection event to TSF
-```
+```cpp
 DeferFn([=] {
 	auto oldSelIndex = g_currentSelIndex;
 	auto oldSelCount = g_currentSelCount;
@@ -95,7 +93,48 @@ This happens when we only press the letter 'h' on the keyboard. Take note that T
 It is *critical* that this function returns the updated selection values. It *will* break if you try to instead update it 
 with a OnSelectionChange event after the fact!
 
+# SetText and SetSelection can happen multiple within one RequestLock segment
+There doesn't seem to be a any real limit to how many editing-events can be triggered by the IME
+during a RequestLock function. Here's a sequence of events that I captured:
+```
+RequestLock begin
+        OnStartComposition
+        SetText 7:0 'good day'
+        GetText 'Have a good day'
+        OnUpdateComposition
+        OnEndComposition
+        SetSelection 15:0
+        OnStartComposition
+        SetText 15:0 ' '
+        GetText 'Have a good day '
+        OnUpdateComposition
+        OnEndComposition
+        SetSelection 16:0
+        GetActiveView - 1
+        GetScreenExt - Visual data not up to date
+        GetTextExt - Visual data not up to date
+        GetActiveView - 1
+        GetScreenExt - Visual data not up to date
+        GetTextExt - Visual data not up to date
+        GetSelection 16:0
+        OnEndEdit
+RequestLock end
+```
+Here you can notice that the editing happen in the order 
+SetText -> SetSelection -> SetText -> SetSelection.
+
+This might mean you need to capture a list of arbitrary chains of set-text + set-selection
+operations that need to be deferred, depending on your architecture.
 
 # Handling SetText in deferred context
 Every call to SetText is immediately followed up by GetText. The same applies to SetSelection.
 It may also be immediately followed up by GetTextExt.
+
+## Doesn't work: Returing error in SetText and correcting later
+The issue here is that SetSelection never calls if the preceeding SetText fails.
+We gotta pretend that SetText works, so that it will call SetSelection after.
+
+Any dispatch of the SetText+SetSelection events need to happen after SetSelection begins,
+but perhaps happen before SetSelection ends? (SetText happens before SetSelection)
+
+## Might work: Pretending SetText and SetSelection worked and then failing on GetScreenExt
